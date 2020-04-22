@@ -1580,6 +1580,110 @@ read_only_cache::access( new_addr_type addr,
     return cache_status;
 }
 
+
+/// modified - Access cache for register_file_cache: returns HIT/MISS
+enum cache_request_status
+register_file_cache::access( new_addr_type addr,
+                             mem_fetch *mf,
+                             unsigned time,
+                             std::list<cache_event> &events )
+{
+    //assert( mf->get_data_size() <= m_config.get_line_sz());
+    new_addr_type block_addr = m_config.block_addr(addr);
+    //bool wr = mf->get_is_write();
+    unsigned cache_index = (unsigned)-1;
+    enum cache_request_status cache_status = MISS;
+    // probe the cache to cehck HIT/MISS (doesn't change the cache)
+    
+    // Adarsh: added mf and true
+    enum cache_request_status probe_status = m_tag_array->probe(block_addr, cache_index, mf);
+
+
+    // update LRU state
+    //std::cout << "RFC read: " << block_addr << "\n";
+    if (probe_status == HIT){
+        //std::cout << "RFC HIT: " << block_addr << "\n";
+    //Adarsh: Added mf and true
+    //Added mf also
+	    cache_status = m_tag_array->access(block_addr,time,cache_index,mf);
+        //if (wr == true) // RFC write hit, only if previosuly written
+            //m_lines[idx].m_status = MODIFIED; // RFC write
+    }
+
+    // 0 access type is READS
+    m_stats.inc_stats(0, m_stats.select_stats_status(probe_status, cache_status));
+    m_stats.inc_stats_pw(0, m_stats.select_stats_status(probe_status, cache_status));
+    return cache_status;
+}
+
+
+
+// returns evicted block
+enum cache_request_status
+register_file_cache::fill( new_addr_type addr,
+                                warp_inst_t inst, //instruction that is writing to RFC
+                                mem_fetch *mf,
+                                unsigned time,
+                                cache_block_t &evicted,
+                                warp_inst_t &inst_evicted) // instruction whose register is being evicted
+                                //std::list<cache_event> &events )
+{
+    bool wb=false;
+    // For ON-MISS poilicy and modified evicted block, evicted will be non-NULL
+    unsigned cache_index = (unsigned)-1;
+    new_addr_type block_addr = m_config.block_addr(addr);
+    enum cache_request_status probe_status = m_tag_array->probe(block_addr, cache_index,mf);
+    //enum cache_request_status result = m_tag_array->access(addr,time,cache_index, wb, evicted);
+   //Adarsh::::: check which address to use??????
+    evicted_block_info evicted_t;
+    enum cache_request_status result = m_tag_array->access(addr,time,cache_index, wb, evicted_t,mf);
+    //assert(!wb, "RFC allocation has to be set to ON MISS");
+    // RFC is always allocated on instrn write (so, always set to MODIFIED)
+    //m_tag_array->make_modified(cache_index,mf);
+    m_tag_array->make_modified(cache_index);
+
+    // tracking the instruction corresponding to a register in RFC
+    inst_evicted = m_lines_inst[cache_index];  // copy prev instruction
+    m_lines_inst[cache_index] = inst; // write new instruction
+
+    //std::cout << "RFC write: " << block_addr << "\n";
+    // 1 access type is WRITE
+    //m_stats.inc_stats(1, m_stats.select_stats_status(probe_status, result));
+    return result;
+}
+
+
+
+// modified - Test access returns the instrn and reg_id for the to be evicted cache - this info is reqd. for bank calculation
+unsigned
+register_file_cache::test_access(new_addr_type addr, mem_fetch *mf,
+                                 unsigned &evicted_tag,
+                                 warp_inst_t &inst_evicted) {
+    //std::cout << "RFC test access" << "\n";
+    new_addr_type block_addr = m_config.block_addr(addr);
+    unsigned idx = (unsigned)-1;
+    enum cache_request_status probe_status = m_tag_array->probe(block_addr, idx,mf);
+    cache_block_t *evicted_block = m_tag_array->get_block(idx);
+    evicted_tag = evicted_block->m_tag;
+    inst_evicted = m_lines_inst[idx];
+
+    // writeback of evicted is needed only if modified
+    if (evicted_block->get_status(0) == MODIFIED)
+        return 1;
+    else
+        return 0;
+
+//	return 1;
+}
+
+
+
+
+
+
+
+
+
 //! A general function that takes the result of a tag_array probe
 //  and performs the correspding functions based on the cache configuration
 //  The access fucntion calls this function

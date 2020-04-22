@@ -3662,9 +3662,8 @@ bool opndcoll_rfu_t::writeback( warp_inst_t &inst )
 	//debug_rfc:: Error Point : decide the cache block
 	
 	//Adarsh: Updated the cache line block cache
-	//cache_block_t *rfc_evicted;
-	//cache_block_t rfc_evicted;
- 	line_cache_block rfc_evicted;
+	cache_block_t *rfc_evicted;
+ 	//line_cache_block rfc_evicted;
 
         warp_inst_t rfc_inst_evicted;
         unsigned tag_evicted;
@@ -3675,9 +3674,7 @@ bool opndcoll_rfu_t::writeback( warp_inst_t &inst )
         reg_id_evicted = tag_evicted >> (line_sz_log2+nset_log2);
 
         if (evict_valid){
-		//Adarsh :: error
-//         unsigned bank = register_bank(reg_num,inst.warp_id(),m_num_banks,m_bank_warp_shift, sub_core_model, m_num_banks_per_sched, inst.get_schd_id());
-            unsigned bank = register_bank(reg_id_evicted, rfc_inst_evicted.warp_id(), m_num_banks, m_bank_warp_shift,sub_core_model,m_num_banks_per_sched, inst.get_schd_id());
+            unsigned bank = register_bank(reg_id_evicted, rfc_inst_evicted.warp_id(), m_num_banks, m_bank_warp_shift);
             if (m_arbiter.bank_idle(bank)){
                 //std::cout << "RFC writeback: no bank conflict" << "\n";
                 enum cache_request_status cache_access = op_rfc->fill (rfc_addr, inst, NULL, rfc_time, rfc_evicted, rfc_inst_evicted);

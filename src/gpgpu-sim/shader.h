@@ -567,6 +567,8 @@ public:
       m_num_banks=0;
       m_shader=NULL;
       m_initialized=false;
+      // modified
+      op_rfc = NULL;
    }
    void add_cu_set(unsigned cu_set, unsigned num_cu, unsigned num_dispatch);
    typedef std::vector<register_set*> port_vector_t;
@@ -598,6 +600,10 @@ public:
    }
 
    shader_core_ctx *shader_core() { return m_shader; }
+
+      // modified
+   register_file_cache *rfc() { return op_rfc; }
+
 
 private:
 
@@ -735,6 +741,7 @@ private:
       arbiter_t()
       {
          m_queue=NULL;
+         rfc_queue=NULL;
          m_allocated_bank=NULL;
          m_allocator_rr_head=NULL;
          _inmatch=NULL;
@@ -751,7 +758,12 @@ private:
          _inmatch = new int[ m_num_banks ];
          _outmatch = new int[ m_num_collectors ];
          _request = new int*[ m_num_banks ];
-         for(unsigned i=0; i<m_num_banks;i++) 
+         
+	 // modified - add rfc queue for operands than in RFC
+         rfc_queue = new std::list<op_t>[num_banks];
+         //rfc_queue = new std::list<op_t>;
+
+	 for(unsigned i=0; i<m_num_banks;i++) 
              _request[i] = new int[m_num_collectors];
          m_queue = new std::list<op_t>[num_banks];
          m_allocated_bank = new allocation_t[num_banks];
@@ -786,14 +798,40 @@ private:
       // modifiers
       std::list<op_t> allocate_reads(); 
 
-      void add_read_requests( collector_unit_t *cu ) 
+      void add_read_requests( collector_unit_t *cu, register_file_cache *rfc, unsigned time=0 ) 
       {
          const op_t *src = cu->get_operands();
          for( unsigned i=0; i<MAX_REG_OPERANDS*2; i++) {
             const op_t &op = src[i];
             if( op.valid() ) {
                unsigned bank = op.get_bank();
-               m_queue[bank].push_back(op);
+               //m_queue[bank].push_back(op);
+	                     // modified - check for RFC hit for the operand
+               // parse warp_id, reg_id for operand to form RFC address
+               // RFC hit - add to op_t list
+               // RFC miss - add to the bank in m_queue
+               unsigned rfc_reg = op.get_reg(); //this forms tag for full-assoc RFC
+               unsigned rfc_wid = op.get_wid(); //this forms set index
+               unsigned line_sz_log2 = rfc->get_line_sz_log2();
+               unsigned nset_log2 = rfc->get_nset_log2();
+
+               unsigned time_rfc = time;
+               new_addr_type rfc_addr = ((rfc_reg << nset_log2) + rfc_wid) << line_sz_log2;
+               std::list<cache_event> events;
+               //unsigned time_rfc = gpu_sim_cycle+gpu_tot_sim_cycle;
+
+               //std::cout << "Arbiter_t - RFC access initiated" << "\n";
+               enum cache_request_status cache_status;
+               cache_status = rfc->access(rfc_addr, NULL, time_rfc, events);
+               if (cache_status == HIT) {
+                   //std::cout << "Arbiter_t - found operand in RFC" << "\n";
+                   rfc_queue[0].push_back(op);
+               }
+               else
+                   m_queue[bank].push_back(op);
+
+               //m_queue[bank].push_back(op);
+
             }
          }
       }
@@ -830,6 +868,11 @@ private:
       int *_inmatch;
       int *_outmatch;
       int **_request;
+
+      public:
+      // modified
+      std::list<op_t> *rfc_queue;
+
    };
 
    class input_port_t {
@@ -969,6 +1012,9 @@ private:
    //port_to_du_t                     m_dispatch_units;
    //std::map<warp_inst_t**,std::list<collector_unit_t*> > m_free_cu;
    shader_core_ctx                 *m_shader;
+   // modified - add rfc's to operand collector
+   register_file_cache *op_rfc;
+
 };
 
 class barrier_set_t {
@@ -1252,6 +1298,11 @@ public:
     bool response_buffer_full() const;
     void print(FILE *fout) const;
     void print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses );
+    
+     // modified
+    void get_rfc_sub_stats(struct cache_sub_stats &css) const;
+
+
     void get_cache_stats(unsigned &read_accesses, unsigned &write_accesses, unsigned &read_misses, unsigned &write_misses, unsigned cache_type);
     void get_cache_stats(cache_stats &cs);
 
@@ -1409,7 +1460,9 @@ struct shader_core_config : public core_config
         assert( !(n_thread_per_shader % warp_size) );
 
         set_pipeline_latency();
-        
+        // modified - added rfc initialization
+        m_rfc_config.init(m_rfc_config.m_config_string,FuncCachePreferNone);
+    
 	m_L1I_config.init(m_L1I_config.m_config_string,FuncCachePreferNone);
         m_L1T_config.init(m_L1T_config.m_config_string,FuncCachePreferNone);
         m_L1C_config.init(m_L1C_config.m_config_string,FuncCachePreferNone);
@@ -1442,6 +1495,9 @@ struct shader_core_config : public core_config
     unsigned gpgpu_registers_per_block;
     char* pipeline_widths_string;
     int pipe_widths[N_PIPELINE_STAGES];
+
+    // modified - added config for rfc
+    mutable cache_config m_rfc_config;
 
     mutable cache_config m_L1I_config;
     mutable cache_config m_L1T_config;
@@ -1827,6 +1883,9 @@ public:
     const shader_core_config *get_config() const { return m_config; }
     void print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses );
 
+       // modified
+    void get_rfc_sub_stats(struct cache_sub_stats &css) const;
+
     void get_cache_stats(cache_stats &cs);
     void get_L1I_sub_stats(struct cache_sub_stats &css) const;
     void get_L1D_sub_stats(struct cache_sub_stats &css) const;
@@ -2017,7 +2076,11 @@ public:
     Scoreboard               *m_scoreboard;
     opndcoll_rfu_t            m_operand_collector;
     int m_active_warps;
-
+   // modified
+    public:
+    register_file_cache *m_rfc;
+    
+    private:
     //schedule
     std::vector<scheduler_unit*>  schedulers;
 
@@ -2098,6 +2161,9 @@ public:
 
     void display_pipeline( unsigned sid, FILE *fout, int print_mem, int mask );
     void print_cache_stats( FILE *fp, unsigned& dl1_accesses, unsigned& dl1_misses ) const;
+
+       // modified
+    void get_rfc_sub_stats(struct cache_sub_stats &css) const;
 
     void get_cache_stats(cache_stats &cs) const;
     void get_L1I_sub_stats(struct cache_sub_stats &css) const;

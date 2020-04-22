@@ -112,6 +112,9 @@ struct cache_block_t {
     virtual void fill( unsigned time, mem_access_sector_mask_t sector_mask) = 0;
 
     virtual bool is_invalid_line() = 0;
+    
+    virtual void set_m_status();
+    
     virtual bool is_valid_line() = 0;
     virtual bool is_reserved_line() = 0;
     virtual bool is_modified_line() = 0;
@@ -131,6 +134,7 @@ struct cache_block_t {
     virtual ~cache_block_t() {}
 
 
+   // m_status = INVALID;
     new_addr_type    m_tag;
     new_addr_type    m_block_addr;
 
@@ -333,6 +337,16 @@ struct sector_cache_block : public cache_block_t {
     	}
     	return true;
     }
+
+    //Adarsh : added the set function
+    virtual void set_m_status(){
+	for(unsigned i =0; i< SECTOR_CHUNCK_SIZE; ++i) {
+                m_status[i] = MODIFIED;
+        }
+    }
+
+
+
     virtual bool is_valid_line() { return  !(is_invalid_line()); }
     virtual bool is_reserved_line() {
     	//if any of the sector is reserved, then the line is reserved
@@ -418,7 +432,6 @@ struct sector_cache_block : public cache_block_t {
     virtual void print_status() {
     	 printf("m_block_addr is %llu, status = %u %u %u %u\n", m_block_addr, m_status[0], m_status[1], m_status[2], m_status[3]);
     }
-
 
 private:
     unsigned m_sector_alloc_time[SECTOR_CHUNCK_SIZE];
@@ -768,6 +781,7 @@ protected:
     friend class data_cache;
     friend class l1_cache;
     friend class l2_cache;
+    friend class register_file_cache;
     friend class memory_sub_partition;
 };
 
@@ -814,6 +828,14 @@ public:
     float windowed_miss_rate( ) const;
     void get_stats(unsigned &total_access, unsigned &total_misses, unsigned &total_hit_res, unsigned &total_res_fail) const;
 
+
+
+        // modified - add a function to set status to modified for RFC
+    //void make_modified (unsigned idx,mem_fetch* mf) { m_lines[idx]->set_status(MODIFIED, mf->get_access_sector_mask()); }
+    void make_modified (unsigned idx) { 
+	    
+	    m_lines[idx]->set_status(MODIFIED, 0);
+    }   
 	void update_cache_parameters(cache_config &config);
 	void add_pending_line(mem_fetch *mf);
 	void remove_pending_line(mem_fetch *mf);
@@ -830,8 +852,9 @@ protected:
 protected:
 
     cache_config &m_config;
-
     cache_block_t **m_lines; /* nbanks x nset x assoc lines in total */
+    
+    //line_cache_block **m_lines; /* nbanks x nset x assoc lines in total */
 
     unsigned m_access;
     unsigned m_miss;
@@ -1283,6 +1306,45 @@ protected:
     read_only_cache( const char *name, cache_config &config, int core_id, int type_id, mem_fetch_interface *memport, enum mem_fetch_status status, tag_array* new_tag_array )
     : baseline_cache(name,config,core_id,type_id,memport,status, new_tag_array){}
 };
+
+
+
+
+/// modified - Register File Cache
+class register_file_cache : public baseline_cache {
+public:
+    register_file_cache( const char *name, cache_config &config, int core_id, int type_id, mem_fetch_interface *memport, enum mem_fetch_status status )
+    : baseline_cache(name,config,core_id,type_id,memport,status)
+    {
+        m_lines_inst = new warp_inst_t[config.get_num_lines()];
+    }
+
+    // add instruction tracking
+    warp_inst_t *m_lines_inst;
+
+    // Access function for RFC - cehck for miss or hit (modify status for hit)
+    virtual enum cache_request_status access ( new_addr_type addr, mem_fetch *mf, unsigned time, std::list<cache_event> &events );
+
+    // Fill function for RFC - writes to RFC and return evicted block
+    enum cache_request_status fill( new_addr_type addr, warp_inst_t inst, mem_fetch *mf, unsigned time, cache_block_t &evicted, warp_inst_t &inst_evicted);
+
+    // Test access function for RFC - find the evicted block info without modifying RFC
+    unsigned test_access(new_addr_type addr,mem_fetch *mf,  unsigned &evicted_tag, warp_inst_t &inst_evicted);
+
+    // get line_size_log and num_set_log2 for address construction
+    unsigned get_line_sz_log2 () {return m_config.m_line_sz_log2; }
+    unsigned get_nset_log2 () {return m_config.m_nset_log2; }
+
+    virtual ~register_file_cache(){}
+
+protected:
+    register_file_cache( const char *name, cache_config &config, int core_id, int type_id, mem_fetch_interface *memport, enum mem_fetch_status status, tag_array* new_tag_array )
+    : baseline_cache(name,config,core_id,type_id,memport,status, new_tag_array){}
+};
+
+
+
+
 
 /// Data cache - Implements common functions for L1 and L2 data cache
 class data_cache : public baseline_cache {
