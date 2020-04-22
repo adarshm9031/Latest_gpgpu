@@ -1,0 +1,19 @@
+1. register_file_cache inherits from baseline_cache which inherit from cache_t
+2. baseline_cache has:
+	tag_array * m_tag_array
+3. tag_array has:
+	cache_block_t **m_lines => complete cache structure [n_banks * n_sets * assoc]
+	m_lines[i] is updated with (new line_cache_block())
+4. line_cache_block & sector_cache_block is inherited from cache_block_t, as cache_block_t, is an abstract structure and has two functions for each one for sector and other for line.
+5. tag_array::tag_array:
+	m_lines= new_cache_block_t*[Total cache lines]
+	for sector:
+		for(i->Total cache lines) : m_lines[i] = new sector_cache_block()
+	for normal:
+		for(i->Total cache lines) : m_lines[i] = new line_cache_block()
+		
+
+To remember:
+1. whats the use of evicted_block_info ??? see how its getting updated and is affecting the cache_block_t addition/removal.
+2. gpu_cache configuration has N/S to decide whether we want a sector or normal cache(line)
+3. mf can be set to null for calling the line_cache functions. 
